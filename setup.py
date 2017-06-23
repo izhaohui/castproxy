@@ -28,7 +28,9 @@ def main():
             'castproxy'
         ],
         package_data={},
-        data_files=[]
+        data_files=[
+            ('/lib/systemd/system', ['service/castproxy.service'])    
+        ]
     )
 
 if __name__ == "__main__":

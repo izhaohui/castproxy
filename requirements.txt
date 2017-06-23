@@ -3,4 +3,4 @@ circuits-bricks==0.3
 cocy==0.1.13
 PyChromecast==0.8.1
 requests==2.18.1
-tornado=4.4.3
+tornado==4.4.3

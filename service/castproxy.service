@@ -1,0 +1,10 @@
+[Unit]
+  Description=GoogleCast Proxy
+  After=network-online.target
+
+[Service]
+  ExecStart=/usr/local/bin/castproxy 
+
+[Install]
+  WantedBy=multi-user.target
+

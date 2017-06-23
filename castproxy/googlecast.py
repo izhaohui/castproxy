@@ -1,8 +1,6 @@
 #! /usr/bin/env python
 # coding:UTF8
 # author :zhaohui mail:zhaohui-sol@foxmail.com
-
-
 import sys
 reload(sys).setdefaultencoding('utf-8')
 import re
@@ -62,8 +60,7 @@ class GoogleCastRenderer(MediaPlayer):
             elif self.media_state.player_state == "PAUSED":
                 self.state = "PAUSED"
             else:
-                pass
-                # self.state = "TRANSITIONING"
+                self.state = "TRANSITIONING"
         else:
             self.resource_state = None
             if self.state != "IDLE":
@@ -118,7 +115,7 @@ class GoogleCastRenderer(MediaPlayer):
         else:
             return None
 
-    @handler("load")
+    @handler("load", override=True)
     @combine_events
     def _on_load(self, uri, meta_data):
         self.source = uri
@@ -130,7 +127,7 @@ class GoogleCastRenderer(MediaPlayer):
         self._on_stop()
         self.resource = self.transform(uri)
 
-    @handler("play")
+    @handler("play", override=True)
     def _on_play(self):
         if self.resource and self.controller:
             if self.media_state and self.media_state.player_state == "PAUSED":
@@ -141,7 +138,7 @@ class GoogleCastRenderer(MediaPlayer):
         else:
             logging.warning("controller is not available")
 
-    @handler("stop")
+    @handler("stop", override=True)
     def _on_stop(self):
         if self.controller and self.player_state.session_id and self.media_state:
             if self.media_state.player_state != "IDLE":
@@ -151,21 +148,22 @@ class GoogleCastRenderer(MediaPlayer):
             pass
         self.player.quit_app()
 
-    @handler("pause")
+    @handler("pause", override=True)
     def _on_pause(self):
         if self.controller and self.player_state.session_id:
             self.controller.pause()
         else:
             pass
 
-    @handler("seek")
+    @handler("seek", override=True)
     def _on_seek(self, target_sec):
         if self.media_state and self.media_state.duration and self.controller and self.player_state.session_id:
             self.controller.seek(target_sec)
         else:
             pass
 
-    @handler("end_of_media")
+    @handler("end_of_media", override=True)
+    @combine_events
     def _end_media(self):
         self._on_stop()
 
