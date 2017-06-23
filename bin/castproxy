@@ -1,0 +1,18 @@
+#! /usr/bin/env python
+# coding:UTF8
+
+from circuits.tools import graph
+from circuits_bricks.app import Application
+from cocy.upnp import UPnPDeviceServer
+
+from castproxy.googlecast import GoogleCastRenderer
+from castproxy.proxyserver import ProxyServer
+
+if __name__ == '__main__':
+    application = Application("CastProxy", None)
+    upnp_dev_server = UPnPDeviceServer(application.app_dir).register(application)
+    web_proxy_server = ProxyServer(host='0.0.0.0', port=18080).register(application)
+    # Debugger().register(application)
+    media_renderer = GoogleCastRenderer("192.168.33.43", "http://192.168.33.33:18080/proxy/").register(application)
+    print graph(application)
+    application.run()
