@@ -1,18 +1,79 @@
 #! /usr/bin/env python
 # coding:UTF8
 
+import os
+import sys
+import logging
 from circuits.tools import graph
-from circuits_bricks.app import Application
+from circuits_bricks.app import BaseComponent, Configuration, Logger, Log
 from cocy.upnp import UPnPDeviceServer
-
 from castproxy.googlecast import GoogleCastRenderer
 from castproxy.proxyserver import ProxyServer
 
+DEFAULT_CONFIG = {
+    "setting": {
+        "cast": "192.168.33.43",
+        "port": 18080,
+        "address": "192.168.33.33",
+        "display_name": "CastProxy",
+        "config": "/etc/castproxy/castproxy.conf"
+    },
+    "logging": {
+        "file": "/var/log/castproxy.log",
+        "type": "file",
+        "level": "DEBUG",
+        "format": "%%(asctime)s %%(levelname)s %%(module)s.%%(funcName)s Line:%%(lineno)d %%(message)s"
+    }
+}
+
+reload(sys).setdefaultencoding('utf-8')
+
+
+class CastApplication(BaseComponent):
+
+    def __init__(self):
+        super(CastApplication, self).__init__()
+        self._config_dir = os.path.dirname(DEFAULT_CONFIG['setting']['config'])
+        if not os.path.exists(self._config_dir):
+            os.mkdir(self._config_dir)
+
+        self._config = Configuration(DEFAULT_CONFIG['setting']['config'], DEFAULT_CONFIG, dict())
+        self._logger = Logger(
+            self._config.get("logging", "file"),
+            self._config.get("setting", "display_name"),
+            self._config.get("logging", "type"),
+            logging.getLevelName(self._config.get("logging", "level"))
+        ).register(self)
+        self.fire(Log(logging.INFO, 'Application ' + self._config.get("setting", "display_name") + " started"), "logger")
+
+    @property
+    def config_dir(self):
+        return self._config_dir
+
+    @property
+    def google_cast(self):
+        return self._config.get("setting", "cast")
+
+    @property
+    def listen_port(self):
+        return self._config.get("setting", "port")
+
+    @property
+    def listen_address(self):
+        return self._config.get("setting", "address")
+
+    @property
+    def display_name(self):
+        return self._config.get("setting", "display_name")
+
+    @property
+    def http_base(self):
+        return "http://%s:%s/proxy/" % (self.listen_address, self.listen_port)
+
 if __name__ == '__main__':
-    application = Application("CastProxy", None)
-    upnp_dev_server = UPnPDeviceServer(application.app_dir).register(application)
-    web_proxy_server = ProxyServer(host='0.0.0.0', port=18080).register(application)
-    # Debugger().register(application)
-    media_renderer = GoogleCastRenderer("192.168.33.43", "http://192.168.33.33:18080/proxy/").register(application)
-    print graph(application)
-    application.run()
+    app = CastApplication()
+    UPnPDeviceServer(app.config_dir).register(app)
+    ProxyServer(app.listen_address, app.listen_port).register(app)
+    GoogleCastRenderer(app.google_cast, app.display_name, app.http_base).register(app)
+    print graph(app)
+    app.run()

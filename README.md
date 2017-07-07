@@ -15,5 +15,8 @@ tornado=4.4.3
 # Test
 
 Netease Music
+
 QQ Music
+
+Meizu Music
 

@@ -1,27 +1,22 @@
 #! /usr/bin/env python
 # coding:UTF8
 # author :zhaohui mail:zhaohui-sol@foxmail.com
-import sys
-reload(sys).setdefaultencoding('utf-8')
 import re
 import time
+import logging
 import requests
+import xmltodict
 import pychromecast
-from circuits import Debugger
 from circuits import handler
-from circuits.tools import graph
-from circuits_bricks.app import Application, logging
+from circuits_bricks.app import Log
 from cocy.providers import MediaPlayer, Manifest, evented, combine_events
-from cocy.upnp import UPnPDeviceServer
-from .proxyserver import ProxyServer
 
 
 class GoogleCastRenderer(MediaPlayer):
 
-    manifest = Manifest("GoogleCast", "Cast Proxy")
-
-    def __init__(self, address_or_name, proxy_base, **kwargs):
-        super(GoogleCastRenderer, self).__init__(self.manifest, **kwargs)
+    def __init__(self, address_or_name, display_name, proxy_base, **kwargs):
+        super(GoogleCastRenderer, self).__init__(Manifest("CastProxy", display_name), **kwargs)
+        self.player = None
         self.proxy = proxy_base
         self.address = address_or_name
 
@@ -30,24 +25,32 @@ class GoogleCastRenderer(MediaPlayer):
         self.resource = None
         self.resource_state = None
 
-        if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", self.address):
-            self.player = pychromecast.Chromecast(address_or_name)
-        else:
-            self.player = next(cc for cc in pychromecast.get_chromecasts() if cc.friendly_name == self.address)
+        self.media_album = None
+        self.media_title = None
+        self.media_artist = None
+        self.media_album_image = None
 
+        if self.player and self.player.status:
+            self.player.disconnect()
+        if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", self.address):
+            self.player = pychromecast.Chromecast(self.address)
+        else:
+            self.player = next(cc for cc in pychromecast.get_chromecasts() if cc.device.friendly_name == self.address)
+        if not self.player.is_idle:
+            self.player.quit_app()
+            time.sleep(1)
         self.player.register_status_listener(self)
         self.controller = self.player.media_controller
         self.controller.register_status_listener(self)
         self.player.wait()
-        logging.warning("chromecast init.")
+        self.fire(Log(logging.INFO, "chromecast init."), "logger")
 
     def supportedMediaTypes(self):
-        return ['http-get:*:audio/wave:*', 'http-get:*:audio/mpeg:*', 'http-get:*:audio/aac:*', 'http-get:*:audio/flac:*']
+        return ['http-get:*:audio/wav:*', 'http-get:*:audio/wave:*', 'http-get:*:audio/mpeg:*', 'http-get:*:audio/aac:*', 'http-get:*:audio/flac:*', 'http-get:*:audio/ogg:*']
 
     def new_media_status(self, state):
         self.media_state = state
-        logging.warning("new media state available, player state is %s." %
-                        (self.media_state.player_state if self.media_state else None))
+        self.fire(Log(logging.INFO, "new media state, player state is %s." % (self.media_state.player_state if self.media_state else None)), "logger")
         if self.media_state and self.media_state.player_state in ("PLAYING", "PAUSED", "BUFFERING"):
             self.resource_state = {
                 "time": time.time(),
@@ -62,52 +65,29 @@ class GoogleCastRenderer(MediaPlayer):
             else:
                 self.state = "TRANSITIONING"
         else:
+            self.state = "IDLE"
+            self.source = None
+            self.next_source = None
             self.resource_state = None
-            if self.state != "IDLE":
-                self.state = "IDLE"
-                self.source = None
-                self.next_source = None
-                self.source_meta_data = None
-            else:
-                pass
+            self.source_meta_data = None
 
     def new_cast_status(self, state):
         self.player_state = state
-        if not state:
-            self.reconnect()
-        else:
-            pass
 
-    def reconnect(self):
-        if self.player:
-            self.player.quit_app()
-            self.player.disconnect()
-        else:
-            logging.warning("player is not available")
-        if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", self.address):
-            self.player = pychromecast.Chromecast(self.address)
-        else:
-            self.player = next(cc for cc in pychromecast.get_chromecasts() if cc.friendly_name == self.address)
-        self.player.register_status_listener(self)
-        self.controller = self.player.media_controller
-        self.controller.register_status_listener(self)
-        self.player.wait()
-        logging.warning("reconnect chromecast....")
-
-    def transform(self, uri):
+    def _fetch_location(self, uri):
         response = requests.head(uri, timeout=5)
         if response.ok:
             location_key = "location" if "location" in response.headers else ("Location" if "Location" in response.headers else None)
             if location_key:
-                return self.transform(response.headers[location_key])
+                return self._fetch_location(response.headers[location_key])
             else:
                 if self.proxy:
                     proxy_uri = self.proxy + uri.encode("hex") + ".mp3" if uri.find("?") > 0 else uri
                 else:
                     if uri.find("?") > 0:
-                        logging.warning("chromecast can not play urls with querystring.")
+                        self.fire(Log(logging.WARNING, "chromecast can not play urls with querystring."), "logger")
                     proxy_uri = uri
-                logging.warning("chromcast play url %s" % proxy_uri)
+                self.fire(Log(logging.INFO, "chromcast play url %s" % proxy_uri), "logger")
                 return {
                     'uri': proxy_uri,
                     'content_type': response.headers.get('Content-Type', "audio/mpeg")
@@ -124,33 +104,45 @@ class GoogleCastRenderer(MediaPlayer):
         self.current_track = 1
         self.next_source = ""
         self.next_source_meta_data = ""
-        self._on_stop()
-        self.resource = self.transform(uri)
+        if meta_data:
+            try:
+                media_properties = xmltodict.parse(meta_data)
+            except Exception, e:
+                media_properties = None
+                self.fire(Log(logging.WARNING, e.message), "logger")
+            if media_properties:
+                media_properties_item = media_properties.get("DIDL-Lite", dict()).get("item", dict())
+                self.media_title = media_properties_item.get("dc:title")
+                self.media_album = media_properties_item.get("upnp:album")
+                self.media_artist = media_properties_item.get("upnp:artist")
+                self.media_album_image = media_properties_item.get("upnp:albumArtURI")
+        self.resource = self._fetch_location(uri)
 
     @handler("play", override=True)
     def _on_play(self):
+        self.fire(Log(logging.DEBUG, "googlecast play called."), "logger")
         if self.resource and self.controller:
             if self.media_state and self.media_state.player_state == "PAUSED":
                 self.controller.play()
             else:
-                self.controller.play_media(self.resource['uri'], self.resource['content_type'])
+                if not self.player.is_idle:
+                    self.player.quit_app()
+                    time.sleep(1)
+                self.controller.play_media(self.resource['uri'], self.resource['content_type'], self.media_title, self.media_album_image)
                 self.controller.block_until_active()
         else:
-            logging.warning("controller is not available")
+            self.fire(Log(logging.WARNING, "controller is not available"), "logger")
 
     @handler("stop", override=True)
     def _on_stop(self):
-        if self.controller and self.player_state.session_id and self.media_state:
-            if self.media_state.player_state != "IDLE":
-                self.controller.stop()
-                time.sleep(1)
-        else:
-            pass
-        self.player.quit_app()
+        if self.player.media_controller and self.player_state.session_id:
+            self.player.media_controller.stop()
+            self.player.quit_app()
+        self.fire(Log(logging.INFO, "call stop."), "logger")
 
     @handler("pause", override=True)
     def _on_pause(self):
-        if self.controller and self.player_state.session_id:
+        if self.controller and self.player_state and self.player_state.session_id:
             self.controller.pause()
         else:
             pass
@@ -165,10 +157,11 @@ class GoogleCastRenderer(MediaPlayer):
     @handler("end_of_media", override=True)
     @combine_events
     def _end_media(self):
+        self.fire(Log(logging.WARNING, "media end."), "logger")
         self._on_stop()
 
     @handler("stopped")
-    def _stopped(self):
+    def _stopped(self, event, component):
         if self.player:
             self.player.quit_app()
             self.player.disconnect()
@@ -185,16 +178,17 @@ class GoogleCastRenderer(MediaPlayer):
 
     def current_position(self):
         if self.resource_state:
-            logging.warning("get position when state is %s" % self.resource_state['state'])
-            if self.resource_state['state'] == "PLAYING":
+            if self.state == "PLAYING":
                 _position = self.resource_state['position'] + (time.time() - self.resource_state['time'])
-            elif self.resource_state['state'] == "PAUSED" or self.resource_state['state'] == "BUFFERING":
+            elif self.state == "PAUSED":
+                _position = self.resource_state['position']
+            elif self.state == "TRANSITIONING":
                 _position = self.resource_state['position']
             else:
                 _position = 0
-            return _position
         else:
-            return 0
+            _position = 0
+        return _position
 
     @property
     def volume(self):
@@ -208,11 +202,3 @@ class GoogleCastRenderer(MediaPlayer):
     def volume(self, volume):
         self.player.set_volume(volume)
 
-if __name__ == '__main__':
-    application = Application("CastProxy", None)
-    upnp_dev_server = UPnPDeviceServer(application.app_dir).register(application)
-    web_proxy_server = ProxyServer(host='0.0.0.0', port=18080).register(application)
-    # Debugger().register(application)
-    media_renderer = GoogleCastRenderer("192.168.33.43", "http://192.168.33.33:18080/proxy/").register(application)
-    print graph(application)
-    application.run()

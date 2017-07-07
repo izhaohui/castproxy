@@ -3,5 +3,7 @@ bin/castproxy
 castproxy/__init__.py
 castproxy/googlecast.py
 castproxy/proxyserver.py
+castproxy/service/castproxy.service
+
 
 
